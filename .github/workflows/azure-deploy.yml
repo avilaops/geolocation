@@ -1,0 +1,120 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      AZURE_LOCATION: eastus
+      AZURE_RESOURCE_GROUP: rg-geolocation
+      AZURE_RESOURCE_PREFIX: geo
+      BICEP_FILE: infra/main.bicep
+      PARAMETERS_FILE: infra/parameters.dev.json
+      IMAGE_NAME: geolocation
+      RESOURCE_TOKEN: ${{ vars.AZURE_RESOURCE_TOKEN || 'abcde' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run backend tests
+        run: cargo test --locked
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build container image
+        run: |
+          docker build \
+            --file Dockerfile \
+            --tag $IMAGE_NAME:${{ github.sha }} \
+            --tag $IMAGE_NAME:latest \
+            .
+
+      - name: Deploy infrastructure
+        id: deploy-infra
+        env:
+          DEPLOYMENT_NAME: geolocation-${{ github.run_id }}
+        run: |
+          az group create --name $AZURE_RESOURCE_GROUP --location $AZURE_LOCATION
+          az deployment group create \
+            --resource-group $AZURE_RESOURCE_GROUP \
+            --name $DEPLOYMENT_NAME \
+            --template-file $BICEP_FILE \
+            --parameters @$PARAMETERS_FILE \
+            --parameters resourcePrefix=$AZURE_RESOURCE_PREFIX resourceToken=$RESOURCE_TOKEN containerImageRepository=$IMAGE_NAME containerImageTag=${{ github.sha }}
+          echo "deployment_name=$DEPLOYMENT_NAME" >> $GITHUB_OUTPUT
+
+      - name: Wait for infrastructure deployment
+        run: |
+          az deployment group wait \
+            --resource-group $AZURE_RESOURCE_GROUP \
+            --name ${{ steps['deploy-infra'].outputs.deployment_name }} \
+            --created
+
+      - name: Capture deployment outputs
+        run: |
+          outputs=$(az deployment group show \
+            --resource-group $AZURE_RESOURCE_GROUP \
+            --name ${{ steps['deploy-infra'].outputs.deployment_name }} \
+            --query properties.outputs \
+            --output json)
+          login_server=$(echo "$outputs" | jq -r '.containerRegistryLoginServer.value')
+          webapp_name=$(echo "$outputs" | jq -r '.appServiceName.value')
+          plan_name=$(echo "$outputs" | jq -r '.appServicePlan.value')
+          echo "ACR_LOGIN_SERVER=$login_server" >> $GITHUB_ENV
+          echo "ACR_NAME=${login_server%%.azurecr.io}" >> $GITHUB_ENV
+          echo "WEBAPP_NAME=$webapp_name" >> $GITHUB_ENV
+          echo "APPSERVICEPLAN_NAME=$plan_name" >> $GITHUB_ENV
+
+      - name: Azure Container Registry login
+        run: az acr login --name $ACR_NAME
+
+      - name: Tag container image
+        run: |
+          docker tag $IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+          docker tag $IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$IMAGE_NAME:latest
+
+      - name: Push container image to ACR
+        run: |
+          docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+          docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:latest
+
+      - name: Deploy container to Azure Web App
+        run: |
+          az webapp config container set \
+            --name $WEBAPP_NAME \
+            --resource-group $AZURE_RESOURCE_GROUP \
+            --docker-custom-image-name $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }} \
+            --docker-registry-server-url https://$ACR_LOGIN_SERVER
+          az webapp restart --name $WEBAPP_NAME --resource-group $AZURE_RESOURCE_GROUP

@@ -1,0 +1,33 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "resourcePrefix": {
+            "value": "geo"
+        },
+        "resourceToken": {
+            "value": "dev01"
+        },
+        "containerImageRepository": {
+            "value": "geolocation"
+        },
+        "containerImageTag": {
+            "value": "latest"
+        },
+        "containerPort": {
+            "value": 8080
+        },
+        "acrSku": {
+            "value": "Basic"
+        },
+        "appServiceSkuName": {
+            "value": "F1"
+        },
+        "appServiceSkuTier": {
+            "value": "Free"
+        },
+        "enableKeyVault": {
+            "value": false
+        }
+    }
+}

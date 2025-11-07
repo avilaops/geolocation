@@ -1,0 +1,52 @@
+# Rust
+/target
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# WASM build artifacts (manter stubs)
+*.wasm
+*.wasm.map
+frontend/wasm/*.js
+frontend/wasm/package.json
+frontend/wasm/.gitignore
+!frontend/wasm/geolocation.ts
+!frontend/wasm/README.md
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+data/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Test data
+/test_data/*.xml
+!/test_data/sample_*.xml

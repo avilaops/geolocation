@@ -1,0 +1,160 @@
+import { useState, useEffect } from 'react'
+import { Search, FileText } from 'lucide-react'
+import { useStore, Document } from '../store/useStore'
+import { documentService } from '../services/api'
+import toast from 'react-hot-toast'
+
+export default function NotasFiscais() {
+    const { documents, setDocuments } = useStore()
+    const [searchTerm, setSearchTerm] = useState('')
+    const [filteredDocs, setFilteredDocs] = useState<Document[]>([])
+
+    useEffect(() => {
+        loadDocuments()
+    }, [])
+
+    useEffect(() => {
+        const nfes = documents.filter((doc) => doc.tipo === 'NFe')
+        if (searchTerm) {
+            const filtered = nfes.filter(
+                (doc) =>
+                    doc.chave_acesso.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    doc.emitente.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    doc.destinatario.toLowerCase().includes(searchTerm.toLowerCase())
+            )
+            setFilteredDocs(filtered)
+        } else {
+            setFilteredDocs(nfes)
+        }
+    }, [documents, searchTerm])
+
+    const loadDocuments = async () => {
+        try {
+            const data = await documentService.listDocuments('NFe')
+            setDocuments(data)
+        } catch (error) {
+            console.error('Erro ao carregar notas fiscais:', error)
+            toast.error('Erro ao carregar notas fiscais')
+
+            // Dados de exemplo
+            setDocuments([
+                {
+                    id: '1',
+                    tipo: 'NFe',
+                    chave_acesso: '35210812345678901234567890123456789012345678',
+                    numero: '000123',
+                    serie: '1',
+                    data_emissao: '2024-01-15T10:30:00',
+                    emitente: 'Empresa ABC Ltda',
+                    destinatario: 'Cliente XYZ SA',
+                    valor_total: 1500.00,
+                    status: 'Completed',
+                },
+            ])
+        }
+    }
+
+    return (
+        <div className="space-y-6">
+            {/* Título */}
+            <div className="flex items-center justify-between">
+                <div>
+                    <h1 className="text-3xl font-bold text-gray-900">Notas Fiscais (NF-e)</h1>
+                    <p className="text-gray-600 mt-1">
+                        {filteredDocs.length} documento(s) encontrado(s)
+                    </p>
+                </div>
+                <button className="btn-primary">
+                    Exportar Dados
+                </button>
+            </div>
+
+            {/* Busca */}
+            <div className="card">
+                <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                        type="text"
+                        placeholder="Buscar por chave de acesso, emitente ou destinatário..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                </div>
+            </div>
+
+            {/* Tabela */}
+            <div className="card overflow-hidden">
+                <div className="overflow-x-auto">
+                    <table className="w-full">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                            <tr>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                                    Número
+                                </th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                                    Chave de Acesso
+                                </th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                                    Emitente
+                                </th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                                    Destinatário
+                                </th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                                    Data
+                                </th>
+                                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                                    Valor Total
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                            {filteredDocs.length === 0 ? (
+                                <tr>
+                                    <td colSpan={6} className="px-4 py-12 text-center">
+                                        <FileText className="w-12 h-12 mx-auto text-gray-300 mb-2" />
+                                        <p className="text-gray-500">Nenhuma nota fiscal encontrada</p>
+                                        <p className="text-sm text-gray-400 mt-1">
+                                            Faça upload de arquivos XML para começar
+                                        </p>
+                                    </td>
+                                </tr>
+                            ) : (
+                                filteredDocs.map((doc) => (
+                                    <tr key={doc.id} className="hover:bg-gray-50 cursor-pointer">
+                                        <td className="px-4 py-3 whitespace-nowrap">
+                                            <span className="text-sm font-medium text-gray-900">
+                                                {doc.numero}/{doc.serie}
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-3">
+                                            <span className="text-xs font-mono text-gray-600">
+                                                {doc.chave_acesso}
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-3 text-sm text-gray-900">
+                                            {doc.emitente}
+                                        </td>
+                                        <td className="px-4 py-3 text-sm text-gray-900">
+                                            {doc.destinatario}
+                                        </td>
+                                        <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">
+                                            {new Date(doc.data_emissao).toLocaleDateString('pt-BR')}
+                                        </td>
+                                        <td className="px-4 py-3 text-sm text-right font-medium text-gray-900 whitespace-nowrap">
+                                            {doc.valor_total.toLocaleString('pt-BR', {
+                                                style: 'currency',
+                                                currency: 'BRL',
+                                            })}
+                                        </td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    )
+}

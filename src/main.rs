@@ -1,0 +1,236 @@
+use clap::{Parser, Subcommand};
+use colored::*;
+use geolocation::{Database, process_document_file, APP_NAME, VERSION};
+use geolocation::database::mongodb::MongoDB;
+use log::{error, info};
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = APP_NAME)]
+#[command(author, version = VERSION, about = "Leitor de Documentos Fiscais XML (NF-e e CT-e)", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+    
+    /// Caminho do banco de dados SQLite (padrão: ./geolocation.db)
+    #[arg(short, long, default_value = "geolocation.db")]
+    database: String,
+    
+    /// URL do PostgreSQL (opcional, sobrescreve SQLite)
+    #[arg(long)]
+    postgres_url: Option<String>,
+    
+    /// Nível de log (trace, debug, info, warn, error)
+    #[arg(short, long, default_value = "info")]
+    log_level: String,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Processa documentos fiscais XML
+    Process {
+        #[command(subcommand)]
+        doc_type: ProcessType,
+    },
+    
+    /// Consulta documentos no banco de dados
+    Query {
+        /// Tipo de documento (nfe ou cte)
+        #[arg(short, long)]
+        tipo: String,
+        
+        /// Chave de acesso do documento
+        #[arg(short, long)]
+        chave: Option<String>,
+    },
+    
+    /// Exporta dados do banco de dados
+    Export {
+        /// Formato de exportação (json, csv)
+        #[arg(short, long, default_value = "json")]
+        format: String,
+        
+        /// Arquivo de saída
+        #[arg(short, long)]
+        output: String,
+    },
+    
+    /// Inicializa o banco de dados
+    Init,
+}
+
+#[derive(Subcommand)]
+enum ProcessType {
+    /// Processa uma Nota Fiscal Eletrônica
+    Nfe {
+        /// Caminho do arquivo XML
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+    
+    /// Processa um Conhecimento de Transporte Eletrônico
+    Cte {
+        /// Caminho do arquivo XML
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+    
+    /// Processa todos os XMLs de um diretório
+    Batch {
+        /// Diretório contendo os arquivos XML
+        #[arg(short, long)]
+        dir: PathBuf,
+    },
+}
+
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+    
+    // Configura logging
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or(&cli.log_level)
+    ).init();
+    
+    println!("{}", format!("{} v{}", APP_NAME, VERSION).bright_cyan().bold());
+    println!("{}", "━".repeat(50).bright_black());
+    
+    match cli.command {
+        Commands::Init => {
+            let db = connect_database(&cli).await;
+            println!("{}", "Inicializando banco de dados...".yellow());
+            match db.initialize_schema().await {
+                Ok(_) => {
+                    println!("{} {}", "✓".green(), "Banco de dados inicializado com sucesso!".green());
+                }
+                Err(e) => {
+                    error!("Erro ao inicializar banco: {}", e);
+                    eprintln!("{} {}", "✗".red(), format!("Erro: {}", e).red());
+                    std::process::exit(1);
+                }
+            }
+        }
+        
+        Commands::Process { doc_type } => {
+            let mongo = connect_mongo().await;
+            match doc_type {
+                ProcessType::Nfe { file } => {
+                    println!("{}", format!("Processando NF-e: {}", file.display()).cyan());
+                    process_file(&file, &mongo).await;
+                }
+                ProcessType::Cte { file } => {
+                    println!("{}", format!("Processando CT-e: {}", file.display()).cyan());
+                    process_file(&file, &mongo).await;
+                }
+                ProcessType::Batch { dir } => {
+                    println!("{}", format!("Processando diretório: {}", dir.display()).cyan());
+                    process_directory(&dir, &mongo).await;
+                }
+            }
+        }
+        
+        Commands::Query { tipo, chave } => {
+            println!("{}", "Funcionalidade de consulta em desenvolvimento...".yellow());
+            println!("Tipo: {}, Chave: {:?}", tipo, chave);
+        }
+        
+        Commands::Export { format, output } => {
+            println!("{}", "Funcionalidade de exportação em desenvolvimento...".yellow());
+            println!("Formato: {}, Saída: {}", format, output);
+        }
+    }
+}
+
+async fn process_file(file: &PathBuf, mongo: &MongoDB) {
+    match process_document_file(&file.to_string_lossy(), mongo).await {
+        Ok(result) => {
+            info!("Documento processado: {}", result.chave_acesso);
+            println!("{} {}", "✓".green(), "Documento processado com sucesso!".green());
+            println!("  {} {}", "Tipo:".bright_black(), result.document_type);
+            println!("  {} {}", "Chave:".bright_black(), result.chave_acesso);
+            println!("  {} {}", "Mensagem:".bright_black(), result.message);
+        }
+        Err(e) => {
+            error!("Erro ao processar documento: {}", e);
+            eprintln!("{} {}", "✗".red(), format!("Erro: {}", e).red());
+        }
+    }
+}
+
+async fn process_directory(dir: &PathBuf, mongo: &MongoDB) {
+    let mut total = 0;
+    let mut success = 0;
+    let mut failed = 0;
+    
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            
+            if path.extension().and_then(|s| s.to_str()) == Some("xml") {
+                total += 1;
+                println!("\n{}", format!("Processando: {}", path.display()).bright_black());
+                
+                match process_document_file(&path.to_string_lossy(), mongo).await {
+                    Ok(result) => {
+                        success += 1;
+                        println!("{} {} - {}", 
+                            "✓".green(), 
+                            result.chave_acesso.bright_white(),
+                            result.message.green()
+                        );
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        eprintln!("{} {}", "✗".red(), format!("Erro: {}", e).red());
+                    }
+                }
+            }
+        }
+    }
+    
+    println!("\n{}", "━".repeat(50).bright_black());
+    println!("{}", "Resumo do processamento:".bright_cyan().bold());
+    println!("  {} {}", "Total:".bright_black(), total);
+    println!("  {} {}", "Sucesso:".bright_black(), format!("{}", success).green());
+    println!("  {} {}", "Falhas:".bright_black(), format!("{}", failed).red());
+}
+
+async fn connect_database(cli: &Cli) -> Database {
+    if let Some(url) = &cli.postgres_url {
+        info!("Conectando ao PostgreSQL...");
+        match Database::new_postgres(url).await {
+            Ok(db) => db,
+            Err(e) => {
+                error!("Erro ao conectar ao PostgreSQL: {}", e);
+                eprintln!("{} {}", "✗".red(), format!("Erro: {}", e).red());
+                std::process::exit(1);
+            }
+        }
+    } else {
+        info!("Usando SQLite: {}", cli.database);
+        match Database::new_sqlite(&cli.database).await {
+            Ok(db) => db,
+            Err(e) => {
+                error!("Erro ao conectar ao SQLite: {}", e);
+                eprintln!("{} {}", "✗".red(), format!("Erro: {}", e).red());
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+async fn connect_mongo() -> MongoDB {
+    let uri = std::env::var("MONGODB_URI").unwrap_or_else(|_| {
+        eprintln!("{} {}", "✗".red(), "Variável MONGODB_URI não definida".red());
+        std::process::exit(1);
+    });
+
+    match MongoDB::connect(&uri).await {
+        Ok(mongo) => mongo,
+        Err(e) => {
+            error!("Erro ao conectar ao MongoDB: {}", e);
+            eprintln!("{} {}", "✗".red(), format!("Erro MongoDB: {}", e).red());
+            std::process::exit(1);
+        }
+    }
+}
