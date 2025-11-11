@@ -1,0 +1,48 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "resourcePrefix": {
+            "value": "geo"
+        },
+        "resourceToken": {
+            "value": "prod1"
+        },
+        "containerImageRepository": {
+      "value": "geolocation"
+        },
+     "containerImageTag": {
+         "value": "latest"
+        },
+      "containerPort": {
+       "value": 8080
+      },
+        "acrSku": {
+   "value": "Standard"
+        },
+        "appServiceSkuName": {
+  "value": "S1"
+        },
+        "appServiceSkuTier": {
+     "value": "Standard"
+      },
+        "enableKeyVault": {
+            "value": true
+        },
+        "enablePostgres": {
+            "value": false
+        },
+        "postgresAdminUser": {
+            "value": "pgadmin"
+        },
+        "postgresVersion": {
+          "value": "16"
+        },
+        "postgresSkuName": {
+            "value": "Standard_B2s"
+        },
+        "postgresStorageSizeGB": {
+   "value": 128
+     }
+    }
+}

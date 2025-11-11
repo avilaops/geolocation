@@ -1,0 +1,230 @@
+# Docker Compose para Desenvolvimento Local
+#
+# Uso:
+#   docker-compose -f docker-compose.dev.yml up
+#
+# Serviços:
+#   - app: Aplicação principal (Rust backend + React frontend)
+#   - postgres: Banco de dados PostgreSQL
+#   - pgadmin: Interface web para PostgreSQL (opcional)
+
+version: '3.8'
+
+services:
+  # ============================================================
+  # Aplicação Principal
+  # ============================================================
+  app:
+    build:
+      context: .
+ dockerfile: Dockerfile
+      target: backend-builder  # Usa apenas stage do backend para dev
+    container_name: geolocation-app-dev
+    ports:
+ - "8080:8080"  # API backend
+      - "5173:5173"  # Vite dev server (se habilitar frontend)
+    environment:
+      # Database
+      - DATABASE_URL=postgresql://geolocation:geolocation@postgres:5432/geolocation
+      
+      # Logging
+      - RUST_LOG=debug
+      - RUST_BACKTRACE=1
+      
+      # App config
+      - PORT=8080
+      
+      # Google Maps (opcional - configure seu próprio)
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+    volumes:
+      # Hot reload: monta código-fonte
+ - ./src:/app/src:ro
+      - ./Cargo.toml:/app/Cargo.toml:ro
+      - ./Cargo.lock:/app/Cargo.lock:ro
+      
+      # Persist SQLite (se usar)
+   - ./data:/app/data
+      
+      # Cache de build
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
+    depends_on:
+   postgres:
+    condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - geolocation-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================================
+  # PostgreSQL Database
+  # ============================================================
+  postgres:
+image: postgres:16-alpine
+    container_name: geolocation-postgres-dev
+    ports:
+      - "5432:5432"
+ environment:
+      - POSTGRES_DB=geolocation
+      - POSTGRES_USER=geolocation
+      - POSTGRES_PASSWORD=geolocation
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    volumes:
+      # Persist data
+      - postgres-data:/var/lib/postgresql/data
+    
+      # Init scripts (se houver)
+      # - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    restart: unless-stopped
+    networks:
+      - geolocation-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geolocation"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # pgAdmin (Opcional - Interface Web para PostgreSQL)
+  # ============================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: geolocation-pgadmin-dev
+    profiles:
+      - tools  # Só inicia com: docker-compose --profile tools up
+    ports:
+    - "5050:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@geolocation.local
+      - PGADMIN_DEFAULT_PASSWORD=admin
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+  depends_on:
+      - postgres
+    restart: unless-stopped
+    networks:
+   - geolocation-network
+
+  # ============================================================
+  # MongoDB (Alternativa ao PostgreSQL)
+  # ============================================================
+  mongodb:
+    image: mongo:7
+    container_name: geolocation-mongo-dev
+    profiles:
+      - mongo  # Só inicia com: docker-compose --profile mongo up
+    ports:
+      - "27017:27017"
+    environment:
+ - MONGO_INITDB_ROOT_USERNAME=geolocation
+      - MONGO_INITDB_ROOT_PASSWORD=geolocation
+      - MONGO_INITDB_DATABASE=geolocation
+  volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    restart: unless-stopped
+    networks:
+      - geolocation-network
+    healthcheck:
+    test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+# ============================================================
+  # Redis (Cache - Opcional)
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: geolocation-redis-dev
+    profiles:
+   - cache  # Só inicia com: docker-compose --profile cache up
+ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - geolocation-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+   interval: 10s
+      timeout: 5s
+      retries: 5
+
+# ============================================================
+# Volumes Persistentes
+# ============================================================
+volumes:
+  postgres-data:
+    driver: local
+  pgadmin-data:
+    driver: local
+  mongo-data:
+    driver: local
+  mongo-config:
+  driver: local
+  redis-data:
+    driver: local
+  cargo-cache:
+    driver: local
+  target-cache:
+    driver: local
+
+# ============================================================
+# Network
+# ============================================================
+networks:
+  geolocation-network:
+    driver: bridge
+
+# ============================================================
+# NOTAS DE USO
+# ============================================================
+#
+# Comandos úteis:
+#
+# 1. Subir apenas app + postgres:
+#    docker-compose -f docker-compose.dev.yml up
+#
+# 2. Subir com pgAdmin:
+#    docker-compose -f docker-compose.dev.yml --profile tools up
+#
+# 3. Usar MongoDB ao invés de PostgreSQL:
+#  docker-compose -f docker-compose.dev.yml --profile mongo up
+#
+# 4. Com cache Redis:
+#    docker-compose -f docker-compose.dev.yml --profile cache up
+#
+# 5. Ver logs:
+#    docker-compose -f docker-compose.dev.yml logs -f app
+#
+# 6. Rebuild (após mudanças no Dockerfile):
+#    docker-compose -f docker-compose.dev.yml up --build
+#
+# 7. Limpar tudo:
+#    docker-compose -f docker-compose.dev.yml down -v
+#
+# 8. Rodar migrations:
+#  docker-compose -f docker-compose.dev.yml exec app sqlx migrate run
+#
+# 9. Acessar shell do container:
+#    docker-compose -f docker-compose.dev.yml exec app sh
+#
+# 10. Acessar PostgreSQL CLI:
+#     docker-compose -f docker-compose.dev.yml exec postgres psql -U geolocation
+#
+# Acessos Web:
+# - App: http://localhost:8080
+# - API Health: http://localhost:8080/api/health
+# - pgAdmin: http://localhost:5050 (admin@geolocation.local / admin)
+#

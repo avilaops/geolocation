@@ -1,0 +1,128 @@
+# EditorConfig - Configuração consistente de código entre diferentes editores e IDEs
+# https://editorconfig.org
+
+# Top-most EditorConfig file
+root = true
+
+# Configuração padrão para todos os arquivos
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Arquivos Rust
+[*.rs]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+# Arquivos Cargo
+[Cargo.toml]
+indent_style = space
+indent_size = 4
+
+[Cargo.lock]
+indent_style = space
+indent_size = 4
+insert_final_newline = false
+
+# Arquivos TypeScript/JavaScript
+[*.{ts,tsx,js,jsx}]
+indent_style = space
+indent_size = 2
+max_line_length = 120
+
+# JSON
+[*.json]
+indent_style = space
+indent_size = 2
+
+# YAML
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+# Markdown
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+# HTML
+[*.html]
+indent_style = space
+indent_size = 2
+
+# CSS/SCSS
+[*.{css,scss}]
+indent_style = space
+indent_size = 2
+
+# Shell scripts
+[*.{sh,bash}]
+indent_style = space
+indent_size = 2
+end_of_line = lf
+
+# PowerShell
+[*.ps1]
+indent_style = space
+indent_size = 4
+end_of_line = crlf
+
+# SQL
+[*.sql]
+indent_style = space
+indent_size = 2
+
+# Makefiles (MUST use tabs!)
+[{Makefile,*.mk}]
+indent_style = tab
+indent_size = 4
+
+# Docker
+[Dockerfile]
+indent_style = space
+indent_size = 2
+
+[docker-compose*.yml]
+indent_style = space
+indent_size = 2
+
+# Bicep (Azure IaC)
+[*.bicep]
+indent_style = space
+indent_size = 2
+
+# Git config
+[.gitconfig]
+indent_style = tab
+
+[.gitattributes]
+indent_style = space
+indent_size = 2
+
+[.gitignore]
+indent_style = space
+indent_size = 2
+
+# GitHub workflows
+[.github/**/*.yml]
+indent_style = space
+indent_size = 2
+
+# Package managers
+[package.json]
+indent_style = space
+indent_size = 2
+
+[package-lock.json]
+indent_style = space
+indent_size = 2
+insert_final_newline = false
+
+[*.toml]
+indent_style = space
+indent_size = 2

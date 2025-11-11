@@ -37,41 +37,104 @@ param appServiceSkuTier string = 'Standard'
 @description('Provision Azure Key Vault for secret management.')
 param enableKeyVault bool = true
 
+@description('Provision Azure Database for PostgreSQL Flexible Server for production database workloads.')
+param enablePostgres bool = false
 
+@description('PostgreSQL administrator login name (required when enablePostgres = true).')
+param postgresAdminUser string = 'pgadmin'
 
-@description('MongoDB Atlas connection string (required).')
+@description('PostgreSQL administrator password (override before deploying to production).')
 @secure()
-param mongodbUri string
+param postgresAdminPassword string = ''
 
-@description('Google Maps API key (required).')
+@description('PostgreSQL version to deploy when enablePostgres = true.')
+@allowed([
+  '15'
+  '16'
+])
+param postgresVersion string = '16'
+
+@description('Compute SKU for the PostgreSQL Flexible Server.')
+@allowed([
+  'Standard_B1ms'
+  'Standard_B2s'
+  'Standard_D2s_v3'
+])
+param postgresSkuName string = 'Standard_B1ms'
+
+@description('Storage size (GB) for PostgreSQL Flexible Server.')
+@minValue(32)
+@maxValue(1024)
+param postgresStorageSizeGB int = 64
+
+@description('Optional connection string that will be surfaced as an application setting when Key Vault is disabled.')
 @secure()
-param googleMapsApiKey string
+param databaseConnectionString string = ''
+
+@description('Optional Google Maps API key surfaced as an application setting when Key Vault is disabled.')
+@secure()
+param googleMapsApiKey string = ''
 
 var nameSeed = toLower('${resourcePrefix}${resourceToken}')
-var acrName = replace(toLower('acr${nameSeed}'), '-', '')
-var appServicePlanName = toLower('asp-${resourcePrefix}-${resourceToken}')
-var webAppName = toLower('app-${resourcePrefix}-${resourceToken}')
-var logAnalyticsName = toLower('law-${resourcePrefix}-${resourceToken}')
-var appInsightsName = toLower('ai-${resourcePrefix}-${resourceToken}')
-var keyVaultName = replace(toLower('kv-${resourcePrefix}-${resourceToken}'), '-', '')
-
-var keyVaultMongoSecretName = 'mongodb-uri'
+var acrName = toLower('${nameSeed}acr01')
+var appServicePlanName = toLower('${nameSeed}asp01')
+var webAppName = toLower('${nameSeed}app01')
+var logAnalyticsName = toLower('${nameSeed}law01')
+var appInsightsName = toLower('${nameSeed}ai01')
+var keyVaultName = toLower('${nameSeed}kv01')
+var postgresServerName = toLower('${nameSeed}pg01')
+var keyVaultDatabaseSecretName = 'database-url'
 var keyVaultMapsSecretName = 'google-maps-api-key'
 var keyVaultDnsSuffix = environment().suffixes.keyvaultDns
-var mongoSecretUri = enableKeyVault ? format('https://{0}.{1}/secrets/{2}', keyVaultName, keyVaultDnsSuffix, keyVaultMongoSecretName) : ''
-var mapsSecretUri = enableKeyVault ? format('https://{0}.{1}/secrets/{2}', keyVaultName, keyVaultDnsSuffix, keyVaultMapsSecretName) : ''
-
-var commonTags = {
-  Project: 'geolocation'
-  Environment: 'dev'
-  Owner: 'avilaops'
-  ManagedBy: 'bicep'
-}
+var databaseSecretUri = (enableKeyVault
+  ? 'https://${keyVaultName}.${keyVaultDnsSuffix}/secrets/${keyVaultDatabaseSecretName}'
+  : '')
+var mapsSecretUri = (enableKeyVault
+  ? 'https://${keyVaultName}.${keyVaultDnsSuffix}/secrets/${keyVaultMapsSecretName}'
+  : '')
+var secretsAppSettings = (enableKeyVault
+  ? concat(
+      [
+        {
+          name: 'AZURE_KEY_VAULT_NAME'
+          value: keyVaultName
+        }
+      ],
+      [
+        {
+          name: 'DATABASE_URL'
+          value: '@Microsoft.KeyVault(SecretUri=${databaseSecretUri})'
+        }
+      ],
+      [
+        {
+          name: 'GOOGLE_MAPS_API_KEY'
+          value: '@Microsoft.KeyVault(SecretUri=${mapsSecretUri})'
+        }
+      ]
+    )
+  : concat(
+      ((length(trim(databaseConnectionString)) > 0)
+        ? [
+            {
+              name: 'DATABASE_URL'
+              value: databaseConnectionString
+            }
+          ]
+        : []),
+      ((length(trim(googleMapsApiKey)) > 0)
+        ? [
+            {
+              name: 'GOOGLE_MAPS_API_KEY'
+              value: googleMapsApiKey
+            }
+          ]
+        : [])
+    ))
 
 resource acr 'Microsoft.ContainerRegistry/registries@2023-08-01-preview' = {
   name: acrName
   location: location
-  tags: commonTags
   sku: {
     name: acrSku
   }
@@ -87,12 +150,9 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-08-01-preview' = {
   }
 }
 
-var dockerImageFullName = format('{0}/{1}:{2}', acr.properties.loginServer, containerImageRepository, containerImageTag)
-
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   name: logAnalyticsName
   location: location
-  tags: commonTags
   properties: {
     sku: {
       name: 'PerGB2018'
@@ -107,7 +167,6 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
 resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: appInsightsName
   location: location
-  tags: commonTags
   kind: 'web'
   properties: {
     Application_Type: 'web'
@@ -120,7 +179,6 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location
-  tags: commonTags
   kind: 'linux'
   sku: {
     name: appServiceSkuName
@@ -135,59 +193,9 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   }
 }
 
-var baseAppSettings = [
-  {
-    name: 'WEBSITES_PORT'
-    value: string(containerPort)
-  }
-  {
-    name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
-    value: 'false'
-  }
-  {
-    name: 'DOCKER_ENABLE_CI'
-    value: 'true'
-  }
-  {
-    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-    value: appInsights.properties.ConnectionString
-  }
-  {
-    name: 'RUST_LOG'
-    value: 'info'
-  }
-]
-
-var secretsAppSettings = enableKeyVault
-  ? [
-      {
-        name: 'AZURE_KEY_VAULT_NAME'
-        value: keyVaultName
-      }
-      {
-        name: 'MONGODB_URI'
-        value: format('@Microsoft.KeyVault(SecretUri={0})', mongoSecretUri)
-      }
-      {
-        name: 'GOOGLE_MAPS_API_KEY'
-        value: format('@Microsoft.KeyVault(SecretUri={0})', mapsSecretUri)
-      }
-    ]
-  : [
-      {
-        name: 'MONGODB_URI'
-        value: mongodbUri
-      }
-      {
-        name: 'GOOGLE_MAPS_API_KEY'
-        value: googleMapsApiKey
-      }
-    ]
-
 resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   name: webAppName
   location: location
-  tags: commonTags
   kind: 'app,linux,container'
   identity: {
     type: 'SystemAssigned'
@@ -196,8 +204,32 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
     httpsOnly: true
     serverFarmId: appServicePlan.id
     siteConfig: {
-      linuxFxVersion: format('DOCKER|{0}', dockerImageFullName)
-      appSettings: concat(baseAppSettings, secretsAppSettings)
+      linuxFxVersion: 'DOCKER|${acr.properties.loginServer}/${containerImageRepository}:${containerImageTag}'
+      appSettings: concat(
+        [
+          {
+            name: 'WEBSITES_PORT'
+            value: string(containerPort)
+          }
+          {
+            name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
+            value: 'false'
+          }
+          {
+            name: 'DOCKER_ENABLE_CI'
+            value: 'true'
+          }
+          {
+            name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+            value: appInsights.properties.ConnectionString
+          }
+          {
+            name: 'RUST_LOG'
+            value: 'info'
+          }
+        ],
+        secretsAppSettings
+      )
       alwaysOn: true
       ftpsState: 'Disabled'
       vnetRouteAllEnabled: true
@@ -209,9 +241,9 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
-resource webAppLogs 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
-  name: '${webApp.name}-diagnostics'
+resource webAppName_diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   scope: webApp
+  name: '${webAppName}-diagnostics'
   properties: {
     workspaceId: logAnalytics.id
     logs: [
@@ -237,21 +269,22 @@ resource webAppLogs 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' =
   }
 }
 
-// Commented out due to permission requirements
-// resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-//   name: guid(webApp.id, 'acrpull')
-//   scope: acr
-//   properties: {
-//     principalId: webApp.identity.principalId
-//     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-//     principalType: 'ServicePrincipal'
-//   }
-// }
+resource Microsoft_Web_sites_webAppName_acrpull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: acr
+  name: guid(webApp.id, 'acrpull')
+  properties: {
+    principalId: webApp.identity.principalId
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+    )
+    principalType: 'ServicePrincipal'
+  }
+}
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (enableKeyVault) {
   name: keyVaultName
   location: location
-  tags: commonTags
   properties: {
     tenantId: subscription().tenantId
     sku: {
@@ -271,35 +304,66 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (enableKeyVault) {
   }
 }
 
-resource keyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableKeyVault) {
-  name: guid(keyVault.id, 'kv-secrets-user')
+resource Microsoft_KeyVault_vaults_keyVaultName_kv_secrets_user 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableKeyVault) {
   scope: keyVault
+  name: guid(keyVault.id, 'kv-secrets-user')
   properties: {
-    principalId: webApp.identity.principalId
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+  principalId: webApp.identity.principalId
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
     principalType: 'ServicePrincipal'
   }
 }
 
-resource keyVaultMongoSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (enableKeyVault) {
+resource keyVaultName_keyVaultDatabaseSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (enableKeyVault && (length(trim(databaseConnectionString)) > 0)) {
   parent: keyVault
-  name: keyVaultMongoSecretName
+  name: keyVaultDatabaseSecretName
   properties: {
-    value: mongodbUri
+    value: databaseConnectionString
   }
 }
 
-resource keyVaultMapsSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (enableKeyVault) {
+resource keyVaultName_keyVaultMapsSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (enableKeyVault && (length(trim(googleMapsApiKey)) > 0)) {
   parent: keyVault
   name: keyVaultMapsSecretName
   properties: {
     value: googleMapsApiKey
   }
 }
+
+resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-03-01-preview' = if (enablePostgres) {
+  name: postgresServerName
+  location: location
+  properties: {
+    version: postgresVersion
+    administratorLogin: postgresAdminUser
+    administratorLoginPassword: postgresAdminPassword
+    storage: {
+      storageSizeGB: postgresStorageSizeGB
+    }
+    backup: {
+      backupRetentionDays: 7
+      geoRedundantBackup: 'Disabled'
+    }
+  }
+  sku: {
+    name: postgresSkuName
+    tier: 'Burstable'
+  }
+}
+
+resource postgresServerName_geolocation 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2023-03-01-preview' = if (enablePostgres) {
+  parent: postgresServer
+  name: 'geolocation'
+  properties: {}
+}
+
 output containerRegistryLoginServer string = acr.properties.loginServer
-output appServiceName string = webApp.name
-output appServicePlan string = appServicePlan.name
-output logAnalyticsWorkspace string = logAnalytics.name
-output applicationInsightsName string = appInsights.name
+output appServiceName string = webAppName
+output appServicePlan string = appServicePlanName
+output logAnalyticsWorkspace string = logAnalyticsName
+output applicationInsightsName string = appInsightsName
 output keyVaultProvisioned bool = enableKeyVault
-output keyVaultName string = enableKeyVault ? keyVault.name : ''
+output postgresProvisioned bool = enablePostgres
